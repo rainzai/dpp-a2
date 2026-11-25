@@ -134,6 +134,12 @@ AttentionResult run_attention_on_gpu(const std::vector<float> &h_q,
     checkCudaCall(cudaMemcpy(d_k, h_k.data(), qkv_bytes, cudaMemcpyHostToDevice));
     checkCudaCall(cudaMemcpy(d_v, h_v.data(), qkv_bytes, cudaMemcpyHostToDevice));
 
+    // start timing
+    cudaEvent_t start, stop;
+    checkCudaCall(cudaEventCreate(&start));
+    checkCudaCall(cudaEventCreate(&stop));
+    checkCudaCall(cudaEventRecord(start));
+
     // launch scores kernel
     // one thread per element of S (seq_len x seq_len)
     dim3 block(block_size, block_size);
@@ -155,6 +161,13 @@ AttentionResult run_attention_on_gpu(const std::vector<float> &h_q,
                 (seq_len  + block_size - 1) / block_size);
     output_kernel<<<grid_o, block>>>(d_s, d_v, d_out, seq_len, head_dim);
     checkCudaCall(cudaGetLastError());
+
+    // stop timing
+    checkCudaCall(cudaEventRecord(stop));
+    checkCudaCall(cudaEventSynchronize(stop));
+    checkCudaCall(cudaEventElapsedTime(&elapsed, start, stop));
+    checkCudaCall(cudaEventDestroy(start));
+    checkCudaCall(cudaEventDestroy(stop));
 
     // copy the result back from gpu to cpu
     checkCudaCall(cudaMemcpy(h_out.data(), d_out, qkv_bytes, cudaMemcpyDeviceToHost));
