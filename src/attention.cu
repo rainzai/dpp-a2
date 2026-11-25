@@ -79,7 +79,22 @@ __global__ void softmax_kernel(float *s, size_t seq_len) {
     }
 }
 
-// TODO: output kernel
+// output kernel
+// O = S * V
+__global__ void output_kernel(const float *s, const float *v, float *out,
+                              size_t seq_len, size_t head_dim) {
+    size_t row = blockIdx.y * blockDim.y + threadIdx.y;
+    size_t col = blockIdx.x * blockDim.x + threadIdx.x;
+
+    if (row < seq_len && col < head_dim) {
+        // dot product of row 'row' of S with column 'col' of V
+        float sum = 0.0f;
+        for (size_t j = 0; j < seq_len; j++)
+            sum += s[row * seq_len + j] * v[j * head_dim + col];
+
+        out[row * head_dim + col] = sum;
+    }
+}
 
 /*
  * Manages the attention operation: memory allocation/transfers
@@ -134,7 +149,12 @@ AttentionResult run_attention_on_gpu(const std::vector<float> &h_q,
     softmax_kernel<<<blocks, threads>>>(d_s, seq_len);
     checkCudaCall(cudaGetLastError());
 
-    // TODO: launch output kernel
+    // launch output kernel
+    // one thread per element of O (seq_len x head_dim)
+    dim3 grid_o((head_dim + block_size - 1) / block_size,
+                (seq_len  + block_size - 1) / block_size);
+    output_kernel<<<grid_o, block>>>(d_s, d_v, d_out, seq_len, head_dim);
+    checkCudaCall(cudaGetLastError());
 
     // copy the result back from gpu to cpu
     checkCudaCall(cudaMemcpy(h_out.data(), d_out, qkv_bytes, cudaMemcpyDeviceToHost));
