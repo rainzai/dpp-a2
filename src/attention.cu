@@ -53,7 +53,32 @@ __global__ void scores_kernel(const float *q, const float *k, float *s,
     }
 }
 
-// TODO: softmax kernel
+// softmax kernel
+// normalizes each row of S with softmax (numerically stable)
+__global__ void softmax_kernel(float *s, size_t seq_len) {
+    size_t row = blockIdx.x * blockDim.x + threadIdx.x;
+
+    if (row < seq_len) {
+        float *r = s + row * seq_len;   // r[j] is S[row][j]
+
+        // find the maximum of the row
+        float max = r[0];
+        for (size_t j = 1; j < seq_len; j++)
+            max = fmaxf(max, r[j]);
+
+        // exponentiate (minus max) and sum
+        float sum = 0.0f;
+        for (size_t j = 0; j < seq_len; j++) {
+            r[j] = expf(r[j] - max);
+            sum += r[j];
+        }
+
+        // divide by the sum
+        for (size_t j = 0; j < seq_len; j++)
+            r[j] /= sum;
+    }
+}
+
 // TODO: output kernel
 
 /*
@@ -102,7 +127,13 @@ AttentionResult run_attention_on_gpu(const std::vector<float> &h_q,
     scores_kernel<<<grid_s, block>>>(d_q, d_k, d_s, seq_len, head_dim);
     checkCudaCall(cudaGetLastError());
 
-    // TODO: launch softmax kernel
+    // launch softmax kernel
+    // one thread per row of S
+    int threads = block_size * block_size;
+    int blocks  = (seq_len + threads - 1) / threads;
+    softmax_kernel<<<blocks, threads>>>(d_s, seq_len);
+    checkCudaCall(cudaGetLastError());
+
     // TODO: launch output kernel
 
     // copy the result back from gpu to cpu
