@@ -35,6 +35,27 @@ static void checkCudaCall(cudaError_t result) {
 
 // YOUR CODE HERE: CUDA kernels for the operations
 
+// scores kernel
+// S = Q * K^T / sqrt(d_k)
+__global__ void scores_kernel(const float *q, const float *k, float *s,
+                              size_t seq_len, size_t head_dim) {
+    size_t row = blockIdx.y * blockDim.y + threadIdx.y;
+    size_t col = blockIdx.x * blockDim.x + threadIdx.x;
+
+    if (row < seq_len && col < seq_len) {
+        // dot product of row 'row' of Q with row 'col' of K
+        float sum = 0.0f;
+        for (size_t d = 0; d < head_dim; d++)
+            sum += q[row * head_dim + d] * k[col * head_dim + d];
+
+        // divide by sqrt(d_k)
+        s[row * seq_len + col] = sum / sqrtf((float)head_dim);
+    }
+}
+
+// TODO: softmax kernel
+// TODO: output kernel
+
 /*
  * Manages the attention operation: memory allocation/transfers
  * and kernel launches (QK -> Softmax -> SV).
@@ -68,14 +89,23 @@ AttentionResult run_attention_on_gpu(const std::vector<float> &h_q,
     checkCudaCall(cudaMalloc(&d_s,   s_bytes));
     checkCudaCall(cudaMalloc(&d_out, qkv_bytes));
 
-    // copy the inputs from cpu to gpu (H2D)
+    // copy the inputs from cpu to gpu
     checkCudaCall(cudaMemcpy(d_q, h_q.data(), qkv_bytes, cudaMemcpyHostToDevice));
     checkCudaCall(cudaMemcpy(d_k, h_k.data(), qkv_bytes, cudaMemcpyHostToDevice));
     checkCudaCall(cudaMemcpy(d_v, h_v.data(), qkv_bytes, cudaMemcpyHostToDevice));
 
-    // TODO: kernel launch
+    // launch scores kernel
+    // one thread per element of S (seq_len x seq_len)
+    dim3 block(block_size, block_size);
+    dim3 grid_s((seq_len + block_size - 1) / block_size,
+                (seq_len + block_size - 1) / block_size);
+    scores_kernel<<<grid_s, block>>>(d_q, d_k, d_s, seq_len, head_dim);
+    checkCudaCall(cudaGetLastError());
 
-    // copy the result back from gpu to cpu (D2H)
+    // TODO: launch softmax kernel
+    // TODO: launch output kernel
+
+    // copy the result back from gpu to cpu
     checkCudaCall(cudaMemcpy(h_out.data(), d_out, qkv_bytes, cudaMemcpyDeviceToHost));
 
     // free gpu memory
