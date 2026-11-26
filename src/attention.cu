@@ -14,6 +14,8 @@
 #include <math_constants.h>
 #include <vector>
 
+#define USE_TILED 1   // 0 = baseline, 1 = optimized
+
 /* Utility function, use to do error checking for CUDA calls
  *
  * Use this function like this:
@@ -51,6 +53,43 @@ __global__ void scores_kernel(const float *q, const float *k, float *s,
         // divide by sqrt(d_k)
         s[row * seq_len + col] = sum / sqrtf((float)head_dim);
     }
+}
+
+// tiled scores kernel (optimization)
+// same result as scores_kernel, but Q and K are loaded in tiles into shared
+// memory, so every value is read from global memory only once per block
+__global__ void scores_tiled_kernel(const float *q, const float *k, float *s,
+                                    size_t seq_len, size_t head_dim) {
+    extern __shared__ float tile[];
+    size_t b = blockDim.x;
+    float *q_tile = tile;
+    float *k_tile = tile + b * b;
+
+    size_t tx = threadIdx.x, ty = threadIdx.y;
+    size_t row   = blockIdx.y * b + ty;
+    size_t col   = blockIdx.x * b + tx;
+    size_t k_row = blockIdx.x * b + ty;
+
+    float sum = 0.0f;
+    for (size_t t = 0; t < head_dim; t += b) {
+        // every thread loads one value of Q and one of K
+        // this is coalesced
+        // (+1 avoids bank conflicts)
+        q_tile[ty * b + tx] = (row < seq_len && t + tx < head_dim)
+                              ? q[row * head_dim + t + tx] : 0.0f;
+        k_tile[ty * (b + 1) + tx] = (k_row < seq_len && t + tx < head_dim)
+                                    ? k[k_row * head_dim + t + tx] : 0.0f;
+        __syncthreads();
+        // wait until the whole tile is loaded
+
+        for (size_t d = 0; d < b; d++)
+            sum += q_tile[ty * b + d] * k_tile[tx * (b + 1) + d];
+        __syncthreads();
+        // wait before the tile is overwritten
+    }
+
+    if (row < seq_len && col < seq_len)
+        s[row * seq_len + col] = sum / sqrtf((float)head_dim);
 }
 
 // softmax kernel
@@ -145,7 +184,12 @@ AttentionResult run_attention_on_gpu(const std::vector<float> &h_q,
     dim3 block(block_size, block_size);
     dim3 grid_s((seq_len + block_size - 1) / block_size,
                 (seq_len + block_size - 1) / block_size);
-    scores_kernel<<<grid_s, block>>>(d_q, d_k, d_s, seq_len, head_dim);
+    #if USE_TILED
+        size_t shmem = (block_size * block_size + block_size * (block_size + 1)) * sizeof(float);
+        scores_tiled_kernel<<<grid_s, block, shmem>>>(d_q, d_k, d_s, seq_len, head_dim);
+    #else
+        scores_kernel<<<grid_s, block>>>(d_q, d_k, d_s, seq_len, head_dim);
+    #endif
     checkCudaCall(cudaGetLastError());
 
     // launch softmax kernel
