@@ -1,6 +1,8 @@
+# checks the gpu attention output against a float64 NumPy reference.
+# usage: python3 scripts/check.py data/Q.bin data/K.bin data/V.bin result.bin
 import sys
 import numpy as np
-
+    
 S, D = 128, 768
 
 def load(path):
