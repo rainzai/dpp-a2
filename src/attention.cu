@@ -35,8 +35,6 @@ static void checkCudaCall(cudaError_t result) {
     }
 }
 
-// YOUR CODE HERE: CUDA kernels for the operations
-
 // scores kernel
 // S = Q * K^T / sqrt(d_k)
 __global__ void scores_kernel(const float *q, const float *k, float *s,
@@ -149,8 +147,6 @@ AttentionResult run_attention_on_gpu(const std::vector<float> &h_q,
                                      const size_t head_dim,
                                      const size_t seq_len,
                                      const size_t block_size) {
-
-    // YOUR CODE HERE: Call your CUDA kernels and return resulting array
 
     // output variables
     std::vector<float> h_out(h_q.size());
